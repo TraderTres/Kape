@@ -1,0 +1,309 @@
+// This is your Prisma schema file for Kape — Philippine Coffee Subscription Platform
+// Learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum SubscriptionTier {
+  BIWEEKLY
+  MONTHLY
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAUSED
+  CANCELLED
+}
+
+enum OrderStatus {
+  PENDING
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum LoyaltyTaskType {
+  REFERRAL
+  REVIEW
+  SOCIAL_SHARE
+  PURCHASE
+  ANNIVERSARY
+  SURVEY
+}
+
+enum LoyaltyTier {
+  BRONZE
+  SILVER
+  GOLD
+  PLATINUM
+}
+
+enum CoffeeOrigin {
+  SAGADA
+  BARAKO
+  APO
+  BENGUET
+  BUKIDNON
+  KALINGA
+}
+
+enum RoastLevel {
+  LIGHT
+  MEDIUM
+  MEDIUM_DARK
+  DARK
+}
+
+// ─────────────────────────────────────────────────────────────
+// User
+// ─────────────────────────────────────────────────────────────
+
+model User {
+  id             String    @id @default(cuid())
+  name           String
+  email          String    @unique
+  emailVerified  DateTime?
+  image          String?
+  password       String?   // hashed via bcryptjs
+  role           Role      @default(USER)
+
+  // Loyalty
+  loyaltyPoints  Int         @default(0)
+  loyaltyTier    LoyaltyTier @default(BRONZE)
+
+  // Relations
+  addresses      Address[]
+  subscriptions  Subscription[]
+  orders         Order[]
+  completedTasks UserTask[]
+  accounts       Account[]
+  sessions       Session[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────────────────────
+// NextAuth (required models)
+// ─────────────────────────────────────────────────────────────
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Address
+// ─────────────────────────────────────────────────────────────
+
+model Address {
+  id         String  @id @default(cuid())
+  userId     String
+  label      String  @default("Home") // "Home", "Office", etc.
+  street     String
+  barangay   String
+  city       String  // e.g. "Caloocan", "Quezon City", "Makati"
+  province   String  @default("Metro Manila")
+  zipCode    String
+  isDefault  Boolean @default(false)
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscriptions Subscription[]
+  orders        Order[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("addresses")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Coffee
+// ─────────────────────────────────────────────────────────────
+
+model Coffee {
+  id           String       @id @default(cuid())
+  name         String
+  slug         String       @unique
+  origin       CoffeeOrigin
+  roastLevel   RoastLevel
+  description  String       @db.Text
+  flavorNotes  String[]     // e.g. ["citrus", "dark chocolate", "jasmine"]
+  pricePerBag  Decimal      @db.Decimal(10, 2) // price in PHP
+  bagWeightGrams Int        @default(250)
+  imageUrl     String?
+  stockLevel   Int          @default(0)
+  isAvailable  Boolean      @default(true)
+  isFeatured   Boolean      @default(false)
+
+  subscriptions Subscription[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("coffees")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Subscription
+// ─────────────────────────────────────────────────────────────
+
+model Subscription {
+  id              String             @id @default(cuid())
+  userId          String
+  coffeeId        String
+  addressId       String
+  tier            SubscriptionTier
+  status          SubscriptionStatus @default(ACTIVE)
+  startedAt       DateTime           @default(now())
+  nextDeliveryAt  DateTime
+  cancelledAt     DateTime?
+  pausedAt        DateTime?
+
+  // Pricing snapshot at time of subscription
+  priceAtSubscription Decimal @db.Decimal(10, 2)
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  coffee  Coffee  @relation(fields: [coffeeId], references: [id])
+  address Address @relation(fields: [addressId], references: [id])
+  orders  Order[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("subscriptions")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Order
+// ─────────────────────────────────────────────────────────────
+
+model Order {
+  id             String      @id @default(cuid())
+  orderNumber    String      @unique @default(cuid())
+  userId         String
+  subscriptionId String?
+  addressId      String
+
+  status         OrderStatus @default(PENDING)
+  subtotal       Decimal     @db.Decimal(10, 2)
+  discount       Decimal     @default(0) @db.Decimal(10, 2)
+  shippingFee    Decimal     @default(0) @db.Decimal(10, 2)
+  total          Decimal     @db.Decimal(10, 2)
+
+  // Loyalty discount applied
+  pointsUsed     Int         @default(0)
+  pointsEarned   Int         @default(0)
+
+  items          OrderItem[]
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+  address      Address       @relation(fields: [addressId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id       String  @id @default(cuid())
+  orderId  String
+  coffeeName String  // snapshot of coffee name at order time
+  quantity Int
+  unitPrice Decimal @db.Decimal(10, 2)
+  subtotal  Decimal @db.Decimal(10, 2)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("order_items")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Loyalty / Quest System
+// ─────────────────────────────────────────────────────────────
+
+model LoyaltyTask {
+  id          String          @id @default(cuid())
+  title       String
+  description String          @db.Text
+  pointValue  Int
+  taskType    LoyaltyTaskType
+  isRepeatable Boolean        @default(false)
+  isActive    Boolean         @default(true)
+  iconName    String          @default("Star") // Lucide icon name
+
+  completedBy UserTask[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("loyalty_tasks")
+}
+
+model UserTask {
+  id          String   @id @default(cuid())
+  userId      String
+  taskId      String
+  completedAt DateTime @default(now())
+
+  user User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task LoyaltyTask @relation(fields: [taskId], references: [id])
+
+  @@unique([userId, taskId]) // prevent duplicate completion for non-repeatable tasks
+  @@map("user_tasks")
+}
